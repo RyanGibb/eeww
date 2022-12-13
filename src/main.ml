@@ -69,7 +69,7 @@ let server env =
     [ ("-p", Arg.Set_int port, " Listening port number(8080 by default)") ]
     ignore "An HTTP/1.1 server";
   Eio.Switch.run @@ fun sw ->
-  let docroot = Eio.Path.open_dir ~sw (env#cwd / "./site") in
+  let docroot = Eio.Path.open_dir ~sw env#cwd in
   Server.run ~port:!port env (app env#fs docroot)
 
 let _ =
