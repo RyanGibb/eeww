@@ -6,8 +6,7 @@
   (:standard -w -50-6-27-32-39-33-35))
  (public_name omd)
  (libraries
-   bigarray
-   bytes))
+   bigarray))
 
 (executable
  (name omd_main)
