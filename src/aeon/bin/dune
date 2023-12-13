@@ -11,3 +11,10 @@
  (public_name resolved)
  (package aeon)
  (libraries dns_resolver_eio server_args dns_log logs.fmt))
+
+(executable
+ (name acmenamed)
+ (modules acmenamed)
+ (public_name acmenamed)
+ (package aeon)
+ (libraries letsencrypt-dns mirage-crypto-rng-eio dns_server_eio server_args dns_log))
