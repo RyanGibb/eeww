@@ -23,16 +23,9 @@ module Tls_le = struct
     Eio.Path.save ~create:(`Or_truncate 0o600) csr_file csr_pem;
     Eio.Path.save ~create:(`Or_truncate 0o600) key_file key_pem
 
-  let gen_cert ~csr_pem ~account_pem ~email ~cert_file ~endpoint env =
+  let gen_cert ~csr_pem ~account_pem ~email ~cert_file ~endpoint solver env =
     let account_key = X509.Private_key.decode_pem (Cstruct.of_string account_pem) |> errcheck in
     let request = X509.Signing_request.decode_pem (Cstruct.of_string csr_pem) |> errcheck in
-    let solver =
-      let add_record name record =
-        (* TODO add name = record *)
-        Ok ()
-      in
-      Letsencrypt_dns.dns_solver add_record
-    in
     let sleep n = Eio.Time.sleep env#clock (float_of_int n) in
     let le = Letsencrypt.Client.initialise env ~endpoint ~email account_key |> errcheck in
     let certs = Letsencrypt.Client.sign_certificate env solver le sleep request |> errcheck in
@@ -52,7 +45,7 @@ module Tls_le = struct
       with _ -> false
   end
 
-  let tls_config ?alpn_protocols ~cert_root ~org ~email ~domain ~endpoint env =
+  let tls_config ?alpn_protocols ~cert_root ~org ~email ~domain ~endpoint solver env =
     let account_file = cert_root / "account.pem" in
     let csr_file = cert_root / "csr.pem" in
     let key_file = cert_root / "privkey.pem" in
@@ -69,7 +62,7 @@ module Tls_le = struct
       Eio.traceln "Generating cert file";
       let csr_pem = Eio.Path.load csr_file in
       let account_pem = Eio.Path.load account_file in
-      gen_cert ~csr_pem ~account_pem ~email ~cert_file ~endpoint env
+      gen_cert ~csr_pem ~account_pem ~email ~cert_file ~endpoint solver env
     end;
     get_tls_server_config ?alpn_protocols ~key_file ~cert_file ()
 end
@@ -96,6 +89,29 @@ let run zonefiles log_level addressStrings port no_tcp no_udp
          ~tsig_sign:Dns_tsig.sign trie
   in
 
+  let solver =
+    let add_record name record =
+      let data = Dns_server.Primary.data !server_state in
+      let data = Dns_trie.remove_ty name Dns.Rr_map.Txt data in
+      let rr = 
+        let ttl = 3600l in
+        ttl, Dns.Rr_map.Txt_set.singleton record
+      in
+      let data = Dns_trie.insert name Dns.Rr_map.Txt rr data in
+      (* TODO send out notifications *)
+      let new_server_state, _notifications =
+        let now = Ptime.of_float_s @@ Eio.Time.now env#clock |> Option.get
+        and ts = Mtime.to_uint64_ns @@ Eio.Time.Mono.now env#mono_clock in
+        Dns_server.Primary.with_data !server_state now ts data in
+      server_state := new_server_state;
+      Eio.traceln "added %s to %a" record Domain_name.pp name;
+      Ok ()
+    in
+    Letsencrypt_dns.dns_solver add_record
+  in
+
+  (* ignore @@ (!server_state).data; *)
+  try
   let tls =
     match email, org, domain with
     | None, None, None -> Eio.traceln "Disabling TLS"; `No_tls
@@ -109,13 +125,16 @@ let run zonefiles log_level addressStrings port no_tcp no_udp
     Eio.Switch.run @@ fun sw -> 
     let cert_root = let ( / ) = Eio.Path.( / ) in Eio.Path.open_dir ~sw (env#fs / cert) in
     Mirage_crypto_rng_eio.run (module Mirage_crypto_rng.Fortuna) env @@ fun () ->
-    let config = Tls_le.tls_config ~cert_root ~org ~email ~domain ~endpoint env in
+    let config = Tls_le.tls_config ~cert_root ~org ~email ~domain ~endpoint solver env in
     ();
+  with Tls_le.Le_error _ -> ();
 
   Dns_server_eio.primary ~net:env#net ~clock:env#clock
     ~mono_clock:env#mono_clock ~tcp ~udp server_state log addresses
 
 let () =
+  Logs.set_reporter (Logs_fmt.reporter ());
+  Logs.set_level (Some Logs.Info);
   let open Cmdliner in
   let open Server_args in
   let cmd =
