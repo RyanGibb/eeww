@@ -80,5 +80,6 @@ git subtree add --prefix lib/stdlib-shims https://github.com/ocaml/stdlib-shims 
 git subtree add --prefix src/aeon https://github.com/RyanGibb/aeon.git main --squash
 git subtree add --prefix lib/osrelease https://github.com/avsm/osrelease master
 git subtree add --prefix lib/capnp-rpc https://github.com/avsm/capnp-rpc eio
+git subtree pull --prefix=src/aeon https://github.com/ryangibb/aeon main --squash
 ```
 
