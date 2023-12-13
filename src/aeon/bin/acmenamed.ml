@@ -91,6 +91,7 @@ let run zonefiles log_level addressStrings port no_tcp no_udp
 
   let solver =
     let add_record name record =
+      (* TODO verify name is for _acme-challenge *)
       let data = Dns_server.Primary.data !server_state in
       let data = Dns_trie.remove_ty name Dns.Rr_map.Txt data in
       let rr = 
