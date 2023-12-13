@@ -3,7 +3,7 @@ let run log_level domain subdomain port nameserver =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let client =
-    Transport.dns_client ~sw ~net:env#net ~clock:env#clock
+    Transport.dns_client_stream ~sw ~net:env#net ~clock:env#clock
       ~random:env#secure_random nameserver subdomain domain port log
   in
   Eio.Fiber.both
@@ -46,7 +46,7 @@ let () =
       Term.(
         const run $ logging_default 0 $ domain $ subdomain $ port $ nameserver)
     in
-    let doc = "An authorative nameserver using OCaml 5 Algebraic Effects" in
+    let doc = "An authorative nameserver using OCaml 5 effects-based IO" in
     let info = Cmd.info "netcat" ~man ~doc in
     Cmd.v info term
   in

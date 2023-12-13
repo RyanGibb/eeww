@@ -3,7 +3,7 @@ let run log_level domain subdomain port nameserver netmask tunnel_ip =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let client =
-    Transport.dns_client ~sw ~net:env#net ~clock:env#clock
+    Transport.dns_client_datagram ~sw ~net:env#net ~clock:env#clock
       ~random:env#secure_random nameserver subdomain domain port log
   in
   let tun_fd, tun_name = Tuntap.opentun ~devname:"tun-dns" () in
@@ -11,23 +11,22 @@ let run log_level domain subdomain port nameserver netmask tunnel_ip =
   Tuntap.set_ipv4 tun_name
     ~netmask:(Ipaddr.V4.Prefix.of_string_exn netmask)
     (Ipaddr.V4.of_string_exn tunnel_ip);
+  let mtu = Tuntap.get_mtu tun_name in
   Eio.Fiber.both
-  (fun () ->
-    try Eio.Flow.copy client tun with
-    | Eio.Io (Eio.Exn.X (Eio_unix.Unix_error (EINVAL, "write", _)), _) ->
-        failwith "tund: Error while copying from DNS transport to TUN device"
-    | exn ->
-        Format.fprintf Format.err_formatter
-          "tund error copying from DNS transport to TUN device: %a" Eio.Exn.pp
-          exn;
-        Format.pp_print_flush Format.err_formatter ())
-  (fun () ->
-    try Eio.Flow.copy tun client
-    with exn ->
-      Format.fprintf Format.err_formatter
-        "tund error copying from TUN device to DNS transport: %a" Eio.Exn.pp
-        exn;
-      Format.pp_print_flush Format.err_formatter ())
+    (fun () ->
+      let buf = Cstruct.create mtu in
+      while true do
+        let got = client#recv buf in
+        Eio.traceln "OUT %d" got;
+        tun#write [ Cstruct.sub buf 0 got ]
+      done)
+    (fun () ->
+      let buf = Cstruct.create mtu in
+      while true do
+        let got = Eio.Flow.single_read tun buf in
+        Eio.traceln "INC %d" got;
+        client#send (Cstruct.sub buf 0 got)
+      done)
 
 let () =
   let open Cmdliner in
@@ -76,7 +75,7 @@ let () =
         const run $ logging_default 0 $ domain $ subdomain $ port $ nameserver
         $ netmask $ tunnel_ip)
     in
-    let doc = "An authorative nameserver using OCaml 5 Algebraic Effects" in
+    let doc = "An authorative nameserver using OCaml 5 effects-based IO" in
     let info = Cmd.info "tun" ~man ~doc in
     Cmd.v info term
   in

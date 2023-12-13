@@ -7,7 +7,7 @@ type dns_handler =
   (* queries *)
   * (Dns.proto * Ipaddr.t * Cstruct.t) list
 
-let get_dns_handler ~resolver_state ~clock ~mono_clock : dns_handler =
+let resolver_handle_dns ~clock ~mono_clock resolver_state : dns_handler =
  fun proto (addr : Eio.Net.Sockaddr.t) buf ->
   let new_resolver_state, answers, queries =
     let now = Ptime.of_float_s @@ Eio.Time.now clock |> Option.get
@@ -115,7 +115,7 @@ let tcp_handle log handle_dns : connection_handler =
     (* ignore EOF *)
   with End_of_file -> ()
 
-let tcp_listen listeningSock connection_handler =
+let tcp_listen log handle_dns sock =
   while true do
     let on_error err =
       Format.fprintf Format.err_formatter "Error handling connection: %a\n"
@@ -123,48 +123,13 @@ let tcp_listen listeningSock connection_handler =
       Format.pp_print_flush Format.err_formatter ()
     in
     Eio.Switch.run @@ fun sw ->
-    Eio.Net.accept_fork ~sw listeningSock ~on_error connection_handler
+    Eio.Net.accept_fork ~sw sock ~on_error (tcp_handle log handle_dns)
   done
 
-let start ~net ~clock ~mono_clock ?(tcp = true) ?(udp = true) resolver_state log
-    addresses =
-  let handle_dns = get_dns_handler ~resolver_state ~clock ~mono_clock in
-
-  (* bind to sockets with callback/conection handler *)
-  let listen_on_address addr =
-    let try_bind bind addr =
-      try bind addr
-      with Unix.Unix_error (error, "bind", _) ->
-        Format.fprintf Format.err_formatter "Error binding to %a %s\n"
-          Eio.Net.Sockaddr.pp addr (Unix.error_message error);
-        Format.pp_print_flush Format.err_formatter ();
-        exit 2
-    in
-    (if udp then
-       [
-         (fun () ->
-           Eio.Switch.run @@ fun sw ->
-           let sockUDP =
-             try_bind
-               (Eio.Net.datagram_socket ~sw ~reuse_addr:true net)
-               (`Udp addr)
-           in
-           udp_listen log handle_dns sockUDP);
-       ]
-     else [])
-    @
-    if tcp then
-      [
-        (fun () ->
-          Eio.Switch.run @@ fun sw ->
-          let sockTCP =
-            try_bind
-              (Eio.Net.listen ~sw ~reuse_addr:true ~backlog:4096 net)
-              (`Tcp addr)
-          in
-          let connection_handler = tcp_handle log handle_dns in
-          tcp_listen sockTCP connection_handler);
-      ]
-    else []
-  in
-  Eio.Fiber.all (List.flatten (List.map listen_on_address addresses))
+let resolver ~net ~clock ~mono_clock ?(tcp = true) ?(udp = true) resolver_state
+    log addresses =
+  let handle_dns = resolver_handle_dns ~clock ~mono_clock resolver_state in
+  Listen.on_addresses ~net ~udp ~tcp
+    (udp_listen log handle_dns)
+    (tcp_listen log handle_dns)
+    addresses

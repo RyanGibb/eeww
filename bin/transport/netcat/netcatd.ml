@@ -8,19 +8,19 @@ let run zonefiles log_level addressStrings subdomain port no_tcp no_udp =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let addresses = Server_args.parse_addresses port addressStrings in
+  let rng ?_g length =
+    let buf = Cstruct.create length in
+    Eio.Flow.read_exact env#secure_random buf;
+    buf
+  in
   let server_state =
     let trie, keys = Zonefile.parse_zonefiles ~fs:env#fs zonefiles in
-    let rng ?_g length =
-      let buf = Cstruct.create length in
-      Eio.Flow.read_exact env#secure_random buf;
-      buf
-    in
     ref
     @@ Dns_server.Primary.create ~keys ~rng ~tsig_verify:Dns_tsig.verify
          ~tsig_sign:Dns_tsig.sign trie
   in
   let server =
-    Transport.dns_server ~sw ~net:env#net ~clock:env#clock
+    Transport.dns_server_stream ~sw ~net:env#net ~clock:env#clock
       ~mono_clock:env#mono_clock ~tcp ~udp subdomain server_state log addresses
   in
   Eio.Flow.copy server server
@@ -45,7 +45,7 @@ let () =
         const run $ zonefiles $ logging $ addresses $ subdomain $ port $ no_tcp
         $ no_udp)
     in
-    let doc = "An authorative nameserver using OCaml 5 Algebraic Effects" in
+    let doc = "An authorative nameserver using OCaml 5 effects-based IO" in
     let info = Cmd.info "netcatd" ~man ~doc in
     Cmd.v info term
   in
