@@ -709,6 +709,7 @@ let dns_client_datagram ~sw ~net ~clock ~random nameserver data_subdomain
             ~v4:(fun _v4 -> `UdpV4)
             ~v6:(fun _v6 -> `UdpV6)
             ipaddr
+      | `Unix _ -> failwith "unix domain sockets unsupported"
     in
     Eio.Net.datagram_socket ~sw net proto
   in
