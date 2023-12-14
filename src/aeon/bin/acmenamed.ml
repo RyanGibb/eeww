@@ -89,49 +89,70 @@ let run zonefiles log_level addressStrings port no_tcp no_udp
          ~tsig_sign:Dns_tsig.sign trie
   in
 
+  Eio.Switch.run @@ fun sw ->
+  Eio.Fiber.fork ~sw (fun () -> Dns_server_eio.primary ~net:env#net ~clock:env#clock
+    ~mono_clock:env#mono_clock ~tcp ~udp server_state log addresses);
+
+  let acmeName = ref @@ None in
   let solver =
     let add_record name record =
       (* TODO verify name is for _acme-challenge *)
-      let data = Dns_server.Primary.data !server_state in
-      let data = Dns_trie.remove_ty name Dns.Rr_map.Txt data in
-      let rr = 
-        let ttl = 3600l in
+      let trie = Dns_server.Primary.data !server_state in
+      let trie = Dns_trie.remove_ty name Dns.Rr_map.Txt trie in
+      let ttl = 3600l in
+      let rr =
         ttl, Dns.Rr_map.Txt_set.singleton record
       in
-      let data = Dns_trie.insert name Dns.Rr_map.Txt rr data in
+      let trie = Dns_trie.insert name Dns.Rr_map.Txt rr trie in
       (* TODO send out notifications *)
       let new_server_state, _notifications =
         let now = Ptime.of_float_s @@ Eio.Time.now env#clock |> Option.get
         and ts = Mtime.to_uint64_ns @@ Eio.Time.Mono.now env#mono_clock in
-        Dns_server.Primary.with_data !server_state now ts data in
+        Dns_server.Primary.with_data !server_state now ts trie in
       server_state := new_server_state;
-      Eio.traceln "added %s to %a" record Domain_name.pp name;
+      acmeName := Some name;
+      Eio.traceln "Create '%a %ld IN TXT \"%s\"'" Domain_name.pp name ttl record;
+      (* we could wait for dns propigation here...
+         but we hope that a new un-cached record is created
+         and if not, the server should retry (RFC 8555 S8.2) *)
       Ok ()
     in
     Letsencrypt_dns.dns_solver add_record
   in
 
-  (* ignore @@ (!server_state).data; *)
   try
-  let tls =
-    match email, org, domain with
-    | None, None, None -> Eio.traceln "Disabling TLS"; `No_tls
-    | Some email, Some org, Some domain -> `With_tls (email, org, domain)
-    | _ -> failwith "Must specify all of --email, --org, --domain in order to enable TLS"
-  in
-  match tls with
-  | `No_tls -> ()
-  | `With_tls (email, org, domain) ->
-    let endpoint = if prod then Letsencrypt.letsencrypt_production_url else Letsencrypt.letsencrypt_staging_url in
-    Eio.Switch.run @@ fun sw -> 
-    let cert_root = let ( / ) = Eio.Path.( / ) in Eio.Path.open_dir ~sw (env#fs / cert) in
-    Mirage_crypto_rng_eio.run (module Mirage_crypto_rng.Fortuna) env @@ fun () ->
-    let config = Tls_le.tls_config ~cert_root ~org ~email ~domain ~endpoint solver env in
-    ();
-  with Tls_le.Le_error _ -> ();
-
-  Dns_server_eio.primary ~net:env#net ~clock:env#clock
-    ~mono_clock:env#mono_clock ~tcp ~udp server_state log addresses
+    let tls =
+      match email, org, domain with
+      | None, None, None -> Eio.traceln "Disabling TLS"; `No_tls
+      | Some email, Some org, Some domain -> `With_tls (email, org, domain)
+      | _ -> failwith "Must specify all of --email, --org, --domain in order to enable TLS"
+    in
+    match tls with
+    | `No_tls -> ()
+    | `With_tls (email, org, domain) ->
+      let endpoint = if prod then Letsencrypt.letsencrypt_production_url else Letsencrypt.letsencrypt_staging_url in
+      Eio.Switch.run @@ fun sw ->
+      let cert_root = let ( / ) = Eio.Path.( / ) in Eio.Path.open_dir ~sw (env#fs / cert) in
+      Mirage_crypto_rng_eio.run (module Mirage_crypto_rng.Fortuna) env @@ fun () ->
+      let _config = Tls_le.tls_config ~cert_root ~org ~email ~domain ~endpoint solver env in
+      (* once cert provisioned, remove the record *)
+      match !acmeName with
+      | None -> ()
+      | Some name ->
+        let trie = Dns_server.Primary.data !server_state in
+        let ttl, records = Dns_trie.lookup name Dns.Rr_map.Txt trie |> Result.get_ok in
+        let data = Dns_trie.remove_ty name Dns.Rr_map.Txt trie in
+        (* TODO send out notifications *)
+        let new_server_state, _notifications =
+          let now = Ptime.of_float_s @@ Eio.Time.now env#clock |> Option.get
+          and ts = Mtime.to_uint64_ns @@ Eio.Time.Mono.now env#mono_clock in
+          Dns_server.Primary.with_data !server_state now ts data in
+        server_state := new_server_state;
+        Dns.Rr_map.Txt_set.iter (fun record ->
+          Eio.traceln "Remove '%a %ld IN TXT \"%s\"'" Domain_name.pp name ttl record;
+        ) records;
+      ();
+  with Tls_le.Le_error msg -> Eio.traceln "ACME error: %s" msg
 
 let () =
   Logs.set_reporter (Logs_fmt.reporter ());
