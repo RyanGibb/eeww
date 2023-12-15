@@ -185,7 +185,8 @@ let () =
         const run $ zonefiles $ logging $ addresses $ port $ no_tcp $ no_udp
         $ email $ org $ domain $ prod $ cert)
     in
-    let info = Cmd.info "aeon" ~man in
+    let doc = "Let's Encrypt Nameserver Daemon" in
+    let info = Cmd.info "lend" ~doc ~man in
     Cmd.v info term
   in
   exit (Cmd.eval cmd)
