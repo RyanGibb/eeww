@@ -24,7 +24,7 @@
           dontUseCmakeConfigure = true;
           installPhase = ''
             mkdir $out
-            cp _build/default/src/main.exe $out/
+            cp -r _build/default/src/* $out/
           '';
         };
         devShells.default =
