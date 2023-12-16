@@ -18,3 +18,8 @@
  (public_name lend)
  (package aeon)
  (libraries dns_server_eio server_args dns_log dns letsencrypt-dns mirage-crypto-rng-eio logs.fmt))
+
+(executable
+ (name lenc)
+ (modules lenc)
+ (libraries eio_main cmdliner))
